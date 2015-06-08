@@ -1,7 +1,6 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
-import socket
-import os, sys, subprocess, smtplib
+import socket, os, sys, subprocess, smtplib, re
 from socket import socket, AF_INET, SOCK_STREAM
 from time import localtime, strftime
 from distutils.version import LooseVersion
@@ -55,8 +54,8 @@ def do_backup_p(ip_list,login,passwd): # Соединение с аутенти�
                 mt_serial=str(ssh_cmd(":put [/system routerboard get serial-number]")).rstrip()
                 ROS_Version=str(ssh_cmd(":put [system resource get version]")).rstrip()
                 remote_mt_cfg=ssh_cmd("/export")                
-                if remote_mt_cfg==False or mt_identity==False or ROS_Version==False or mt_serial==False or remote_mt_cfg==False:
-                    printout ("!!! Не удалось получить данные от роутера.",RED)
+                if remote_mt_cfg==False or mt_identity==False or ROS_Version==False or mt_serial==False:
+                    printout ("!!! Не удалось получить данные от роутера." ,RED)
                     error_msg_body=error_msg_body+date_time+"   Не удалось получить данные от роутера. "+ login+"@"+ip+":"+str(port)+"\n"
                     errors_count=errors_count+1
                     continue
@@ -180,8 +179,16 @@ def create_backup(date_time,remote_mt_export,new_backup_flag=""): #Функци�
             s=p.stdout.readline() 
             delta=delta + s
 
-    write_to_file(backup_dir+"/current.rsc",remote_mt_export)        
-    
+    write_to_file(backup_dir+"/current.rsc",remote_mt_export)
+    print (">>> Сохраняю информацию об изменении конфигурации в "+backup_dir+"/"+date_time+"/diff")
+    write_to_file(backup_dir+"/"+date_time+"/diff",delta)
+    add_to_diff_log="""--------------------------------------------------------------
+Дата: %(date)s
+Diff: %(delta)s
+--------------------------------------------------------------
+""" % {"date":date_time, "delta":delta}
+    print (">>> Добавляю информацию об изменениях в diff.log "+backup_dir+"/diff.log")
+    write_to_file_append(backup_dir+"/diff.log",add_to_diff_log)    
     if LooseVersion(ROS_Version) >= LooseVersion("6.13"):
         if config["encrypt"]==True:
             if str(config["backup_passwd"])!="None":
@@ -206,7 +213,8 @@ def ssh_cmd(ssh_command): #Фукия для выполнения команды
     try:
         stdin, stdout, stderr=ssh_client.exec_command(ssh_command,timeout=10)
         ssh_get_data = stdout.read()    
-    except:
+    except Exception, e:
+        print (str(e))
         ssh_client.close()
         return False
     return ssh_get_data 
@@ -230,6 +238,10 @@ def test_port(ssh_host, ssh_port): #функция для проверки от�
 
 def write_to_file(path_to_file,that_write): #функция для записи в файл 
     with open(path_to_file, "w") as myfile:
+        myfile.write(that_write) 
+
+def write_to_file_append(path_to_file,that_write): #функция для записи в файл (добавление в конец файла).
+    with open(path_to_file, "a") as myfile:
         myfile.write(that_write) 
 
 def readfile(fname): #Читает из файла в переменную-список
@@ -305,6 +317,8 @@ def printout(text, colour=WHITE): #Функция для вывода цветн
         sys.stdout.write(text) 
 
 def delta_report(date,ip,identity,mt_serial,delta): #формирует отчет по разнице в конфигурациях
+    passwd_pattern = re.compile( '(password=\\W+\S+|password=\S+|authentication-key=\\W+\S+|authentication-key=\S+|wpa2-pre-shared-key=\\W+\S+|wpa2-pre-shared-key=\S+|passphrase=\\W+\S+|passphrase=\S+|secret=\\W+\S+|secret=\S+)' )
+    delta=passwd_pattern.sub('',delta)
     msg_body="""
 Дата: %(date)s
 IP: %(ip)s
@@ -315,6 +329,7 @@ Diff: %(delta)s
 """ % {"date":date,"ip":ip, "identity":identity, "mt_serial":mt_serial, "delta":delta}
     return msg_body
 
+#def remove_sensitive_data_from_email():
 
 
 # Отсюда начинается исполнение скрипта.
@@ -330,7 +345,7 @@ printout("""
   MMM      MMM  III  KKK KKK   RRRRRR    OOO  OOO     TTT     III  KKK KKK
   MMM      MMM  III  KKK  KKK  RRR  RRR   OOOOOO      TTT     III  KKK  KKK
 ------------------------------------------------------------------------------            
-              backup script by V.Shepelev 0.8 beta
+              backup script by V.Shepelev 0.9 beta
 
 """,GREEN)
 
