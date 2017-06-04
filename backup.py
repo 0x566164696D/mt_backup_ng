@@ -1,343 +1,229 @@
 #!/usr/bin/python
-# -*- coding: utf-8 -*-
-import socket, os, sys, subprocess, smtplib, re
-from socket import socket, AF_INET, SOCK_STREAM
+import os
+import sys 
+import subprocess
+import smtplib
+import re
+import socket
+import difflib
 from time import localtime, strftime
 from distutils.version import LooseVersion
-
 try:
     import paramiko
 except ImportError:
-    print """
+    print("""
 #########################################################
-Для работы скрипта нужен модуль paramiko
+paramiko module not found. Please install it.
 pip install paramiko
-или
+or
 apt-get install python-paramiko
-#########################################################"""
+#########################################################""")
     sys.exit(1)
 
 try:
     import yaml
 except ImportError:
-    print """
+    print("""
 #########################################################
-Для работы скрипта нужен модуль yaml
+yaml module not found. Please install it.
 apt-get install python-yaml
-или
+or
 pip install pyyaml
-#########################################################"""
+#########################################################""")
     sys.exit(1)
 
-BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE = range(8)
-
-def do_backup_p(ip_list,login,passwd): # Соединение с аутентификацией по паролю и выполнение операций резервного копирования 
-    global ssh_client
-    global backup_dir
-    global delta_msg_body
-    global error_msg_body
-    global errors_count
-    global ROS_Version    
-    date_time=strftime("%d-%m-%Y %H:%M", localtime())                
-    
-    for line in ip_list:
+def create_dir(path): #Create directory if it not exists
+    if os.path.isdir(os.path.join(path)) == False:
         try:
-            line=line.split(":")
-            ip=line[0]
-            port=int(line[1])
-        except: continue
-
-        if test_port(ip,port)==True:
-            print(">>> Подключаюсь к "+login+"@"+ip+":"+str(port))            
-            if ssh_connect_p(ip,login,passwd,port)==True:                
-                mt_identity=str(ssh_cmd(":put [system identity get name]")).rstrip()
-                mt_serial=str(ssh_cmd(":put [/system routerboard get serial-number]")).rstrip()
-                ROS_Version=str(ssh_cmd(":put [system resource get version]")).rstrip()
-                remote_mt_cfg=ssh_cmd("/export")                
-                if remote_mt_cfg==False or mt_identity==False or ROS_Version==False or mt_serial==False:
-                    printout ("!!! Не удалось получить данные от роутера." ,RED)
-                    error_msg_body=error_msg_body+date_time+"   Не удалось получить данные от роутера. "+ login+"@"+ip+":"+str(port)+"\n"
-                    errors_count=errors_count+1
-                    continue
-                backup_dir=str(config["backup_pth"])+"/"+ip+"-"+mt_identity+"-"+mt_serial
-                directory_exist(backup_dir)                
-                if is_path_exist(backup_dir+"/current.rsc")==0:                    
-                    create_backup(date_time,remote_mt_cfg,"newbackup")
-                    ssh_client.close()
-                    continue
-                local_mt_cfg=read_file_to_line(backup_dir+"/current.rsc")                
-                if cut_export_header(local_mt_cfg) == cut_export_header(remote_mt_cfg):
-                    print (">>> Конфигурация не изменена.")
-                    ssh_client.close()
-                    continue
-                print (">>> Обнаружено изменение конфигурации, создаю бекап...")
-                delta=create_backup(date_time,remote_mt_cfg)
-                ssh_client.close()
-                delta_msg_body=delta_msg_body+delta_report(date_time,ip,mt_identity,mt_serial,delta)                
-            else:
-                printout ("!!! Не верный логин или пароль для "+login+"@"+ip+":"+str(port), RED)
-                error_msg_body=error_msg_body+date_time+"   Не верный логин или пароль для "+ login+"@"+ip+":"+str(port)+"\n"
-                errors_count=errors_count+1
-        else:
-            printout ("!!! Не возможно подключиться к " + ip + ":" + str(port),RED )
-            error_msg_body=error_msg_body+date_time+"   Не возможно подключиться к " + ip + ":" + str(port)+"\n"
-            errors_count=errors_count+1
-    return
-
-def do_backup_k(ip_list,login,ssh_key_pth): # Соединение с аутентификацией по ключу и выполнение операций резервного копирования
-    global ssh_client
-    global backup_dir
-    global delta_msg_body
-    global error_msg_body
-    global errors_count
-    global ROS_Version    
-    date_time=strftime("%d-%m-%Y %H:%M", localtime())                
+            os.makedirs(os.path.join(path))            
+        except OSError as err:
+             print("---!!! Error: can't create catalog", os.path.join(path), "\n" + str(err))
     
-    for line in ip_list:
-        try:
-            line=line.split(":")
-            ip=line[0]
-            port=int(line[1])
-        except: continue
-        
-        if test_port(ip,port)==True:
-            print(">>> Подключаюсь к "+login+"@"+ip+":"+str(port))
-            if ssh_connect_k(ip,login,port,ssh_key_pth)==True:
-                mt_identity=str(ssh_cmd(":put [system identity get name]")).rstrip()
-                mt_serial=str(ssh_cmd(":put [/system routerboard get serial-number]")).rstrip()                
-                ROS_Version=str(ssh_cmd(":put [system resource get version]")).rstrip()                
-                remote_mt_cfg=ssh_cmd("/export")                
-                if remote_mt_cfg==False or mt_identity==False or ROS_Version==False or mt_serial==False or remote_mt_cfg==False:
-                    printout ("!!! Не удалось получить данные от роутера.",RED)
-                    error_msg_body=error_msg_body+date_time+"   Не удалось получить данные от роутера. "+ login+"@"+ip+":"+str(port)+"\n"
-                    errors_count=errors_count+1
-                    continue                
-                backup_dir=str(config["backup_pth"])+"/"+ip+"-"+mt_identity+"-"+mt_serial                
-                directory_exist(backup_dir)                
-                if is_path_exist(backup_dir+"/current.rsc")==0:                    
-                    create_backup(date_time,remote_mt_cfg,"newbackup")
-                    ssh_client.close()
-                    continue                
-                local_mt_cfg=read_file_to_line(backup_dir+"/current.rsc")                
-                if cut_export_header(local_mt_cfg) == cut_export_header(remote_mt_cfg):
-                    print (">>> Конфигурация не изменена.")
-                    ssh_client.close()
-                    continue
-                print (">>> Обнаружено изменение конфигурации, создаю бекап...")
-                delta=create_backup(date_time,remote_mt_cfg)
-                ssh_client.close()
-                delta_msg_body=delta_msg_body+delta_report(date_time,ip,mt_identity,mt_serial,delta)                
-            else:
-                printout ("!!! Не верный логин или SSH ключ для "+login+"@"+ip+":"+str(port), RED)
-                error_msg_body=error_msg_body+date_time+"   Не верный логин или SSH ключ для "+ login+"@"+ip+":"+str(port)+"\n"
-                errors_count=errors_count+1
-        else:
-            printout ("!!! Не возможно подключиться к " + ip + ":" + str(port),RED )
-            error_msg_body=error_msg_body+date_time+"   Не возможно подключиться к " + ip + ":" + str(port)+"\n"
-            errors_count=errors_count+1
-    return
 
-def ssh_connect_p(ssh_host,ssh_user,ssh_pass,ssh_port): #функция для подключения по ssh с аутентификацией по паролю
-    global ssh_client    
-    ssh_client = ""
-    ssh_client = paramiko.SSHClient()
-    ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+def open_ssh_key():    
     try:
-        ssh_client.connect(hostname=ssh_host,username=ssh_user,password=ssh_pass,port=ssh_port,look_for_keys=False)
-        return True        
-    except paramiko.AuthenticationException:        
-        return False  
-    except Exception, e:
-        return False
-
-def ssh_connect_k(ssh_host,ssh_user,ssh_port,ssh_key_pth): #функция для подключения по ssh с аутентификацией по ключу
-    global ssh_client    
-    ssh_client = paramiko.SSHClient()
-    ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    try:
-        ssh_key = paramiko.DSSKey.from_private_key_file(ssh_key_pth, password=None)
-    except Exception, e:
-        print ("!!! Ошибка: " + ssh_key_pth, e)
-        return False
-    try:
-        ssh_client.connect(hostname=ssh_host,username=ssh_user,pkey=ssh_key,port=ssh_port)
-        return True
-    except Exception, e:
-        return False 
-
-def create_backup(date_time,remote_mt_export,new_backup_flag=""): #Функция для создания бекапа    
-    delta = ""
-    directory_exist(backup_dir+"/"+date_time)    
-    print (">>> Делаю export конфигурации в "+backup_dir+"/"+date_time+"/export.rsc")
-    write_to_file(backup_dir+"/"+date_time+"/export.rsc",remote_mt_export)
-    
-    if new_backup_flag!="newbackup":        
-        PIPE = subprocess.PIPE
-        p = subprocess.Popen("diff --context=1 --ignore-matching-lines='#.*' " + "'" +backup_dir+"/current.rsc"+"' '"+backup_dir+"/"+date_time+"/export.rsc"+"'", shell = True,stdout=subprocess.PIPE)
-        s=' '
-        while s: 
-            s=p.stdout.readline() 
-            delta=delta + s
-
-    write_to_file(backup_dir+"/current.rsc",remote_mt_export)
-    print (">>> Сохраняю информацию об изменении конфигурации в "+backup_dir+"/"+date_time+"/diff")
-    write_to_file(backup_dir+"/"+date_time+"/diff",delta)
-    add_to_diff_log="""--------------------------------------------------------------
-Дата: %(date)s
-Diff: %(delta)s
---------------------------------------------------------------
-""" % {"date":date_time, "delta":delta}
-    print (">>> Добавляю информацию об изменениях в diff.log "+backup_dir+"/diff.log")
-    write_to_file_append(backup_dir+"/diff.log",add_to_diff_log)    
-    if LooseVersion(ROS_Version) >= LooseVersion("6.13"):
-        if config["encrypt"]==True:
-            if str(config["backup_passwd"])!="None":
-                ssh_cmd("/system backup save name=mt-backup.backup dont-encrypt=no password=" + str(config["backup_passwd"]))
-                print (">>> Создаю бекап с шифрованием и паролем")
-            else:
-                ssh_cmd("/system backup save name=mt-backup.backup dont-encrypt=no")
-                print (">>> Создаю бекап с шифрованием")
-        else:
-            print (">>> Создаю бекап БЕЗ шифрования и пароля")
-            ssh_cmd("/system backup save name=mt-backup.backup")    
-    else:
-        print (">>> Создаю бекап БЕЗ шифрования и пароля")
-        ssh_cmd("/system backup save name=mt-backup.backup")
-
-    print (">>> Сохраняю бинарный бекап в " +backup_dir+"/"+date_time+"/mt-backup.backup")
-    ssh_get_file("mt-backup.backup",backup_dir+"/"+date_time+"/mt-backup.backup")
-    return delta
-
-def ssh_cmd(ssh_command): #Фукия для выполнения команды по ssh
-    global ssh_client
-    try:
-        stdin, stdout, stderr=ssh_client.exec_command(ssh_command,timeout=10)
-        ssh_get_data = stdout.read()    
-    except Exception, e:
-        print (str(e))
-        ssh_client.close()
-        return False
-    return ssh_get_data 
-
-def ssh_get_file(remote_file,local_file): #Функция для получения файла по ssh
-    sftp=""
-    sftp = ssh_client.open_sftp()
-    sftp.get(remote_file,local_file)
-    sftp.close() 
-
-def test_port(ssh_host, ssh_port): #функция для проверки открыт ли порт
-    s = socket(AF_INET, SOCK_STREAM)
-    s.settimeout(3)
-    try:
-        s.connect_ex((ssh_host, ssh_port))
-        s.close()
-        return True       
-    except:
-        s.close()
-        return False 
-
-def write_to_file(path_to_file,that_write): #функция для записи в файл 
-    with open(path_to_file, "w") as myfile:
-        myfile.write(that_write) 
-
-def write_to_file_append(path_to_file,that_write): #функция для записи в файл (добавление в конец файла).
-    with open(path_to_file, "a") as myfile:
-        myfile.write(that_write) 
-
-def readfile(fname): #Читает из файла в переменную-список
-    content=[]
-    try:
-        with open(fname) as f:
-            for line in f:
-                line=line.rstrip()
-                content.append(line)
-            return content
+        print("--->>> Try to open key file", config["private_key_file"])
+        with open(config["private_key_file"]) as f:
+            private_key_type = re.findall(r'^-----BEGIN ([DR]SA) PRIVATE KEY-----$', f.readline())[0]    
+        if private_key_type == "DSA":
+            ssh_key = paramiko.DSSKey.from_private_key_file(config["private_key_file"], password=None)            
+        elif private_key_type == "RSA":
+            ssh_key = paramiko.RSAKey.from_private_key_file(config["private_key_file"], password=None)
+        print("--->>> ssh-key loaded. Use key auth")
+        return ssh_key
     except IOError:
-        printout ("!!! Выполнение скрипта невозможно, не могу прочитать файл " + fname, RED)
-        exit() 
+        print("---!!! Error: can't read private_key_file:", config["private_key_file"])    
+        sys.exit()
+    except IndexError:
+        print("---!!! Error: not corrent private_key_file:", config["private_key_file"])
+        sys.exit()
+    except paramiko.ssh_exception.SSHException as err:    
+        print("---!!! Error:", err)
+        sys.exit()
 
-def read_file_to_line(fname): #читает из файла в строковую переменную
-    with open (fname, "r") as myfile:
-        data=myfile.read()
-        return data 
 
-def is_path_exist(path): #проверяет есть ли файл, если нет, создает его
-    if os.path.exists(path):
-        if os.path.isfile(path):
-            return 1
-        elif os.path.isdir(path):
-            return 10
-    else:
-        return 0
-
-def directory_exist(directory): #проверяет существует ли каталог
-    if is_path_exist(directory)==10:
-        return
-    if is_path_exist(directory)==0:
-        try:
-            os.makedirs(directory)
-        except OSError:
-            printout ("!!! Не могу создать каталог " + directory, RED) 
-
-def cut_export_header(string): #удаляет 3 верхние строки из export микротика
-    out_string = '\n'.join(string.split('\n')[3:]) 
-    return out_string 
-
-def sendmail(smtp_serv,login, passwd, mail_from, mail_to,subject,msg): #Функция для отпарвки почты
+def ssh_connect(ssh_host, ssh_port):
+    global ssh_client 
+    global errors_email_report_body  
+    ssh_client = None
+    ssh_client = paramiko.SSHClient()
+    ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())    
     try:
-        server=smtplib.SMTP(smtp_serv)
+        if config['auth_method'] == "key": 
+            ssh_client.connect(hostname=ssh_host, port=int(ssh_port), timeout=3,
+                                username=config['Login'],pkey=config['pkey'])
+            print("--->>> Connection to {0}@{1}:{2} established".format(config['Login'], ssh_host, str(ssh_port)))
+        else:
+            ssh_client.connect(hostname=ssh_host, port=int(ssh_port), timeout=3, look_for_keys=False, allow_agent=False,
+                                username=config['Login'], password=config['Password'])
+            print("--->>> Connection to {0}@{1}:{2} established".format(config['Login'], ssh_host, str(ssh_port)))
+        return True
+    except paramiko.AuthenticationException:
+        error_msg = "---!!! Error: Can't connect to {0}:{1}, Authentication failed \n".format(ssh_host, ssh_port)
+        print(error_msg)
+        errors_email_report_body += error_msg
+    except paramiko.SSHException:
+        error_msg = "---!!! Error: Can't connect to {0}:{1}, SSHException. Maybe key auth failed\n".format(ssh_host, ssh_port)
+        print(error_msg)
+        errors_email_report_body += error_msg
+    except Exception as err:
+        error_msg = "---!!! Error: Can't connect to {0}:{1}, {2}\n".format(ssh_host, ssh_port, err)
+        print(error_msg)
+        errors_email_report_body += error_msg
+    return False 
+
+
+def ssh_cmd(ssh_command):
+    global ssh_client    
+    try:
+        stdin, stdout, stderr=ssh_client.exec_command(ssh_command, timeout=15)
+        ssh_get_data = stdout.read()
+        return ssh_get_data.decode('utf-8')
+    except Exception as err:        
+        print("---!!! Error: Can't send command to router", err)
+        print("\n")
+        ssh_client.close()
+        return ""
+
+
+def ssh_get_file(remote_file, local_file):
+    sftp=""
+    try:
+        sftp = ssh_client.open_sftp()
+        sftp.get(remote_file, local_file)
+        sftp.close()
+    except Exception as err:
+        print("---!!! Error:", err)
+        sftp.close()
+
+
+def do_backup():    
+    global error_msg_body
+    global errors_email_report_body
+    global ssh_client   
+    for _ in routers_list:        
+        ip = _[0][0]        
+        port = _[0][1]
+        timestamp = strftime("%d-%m-%Y (%H-%M)", localtime())
+        if ssh_connect(ip, port):
+            identity = ssh_cmd(":put [/system identity get name]").rstrip()
+            serial_number = ssh_cmd(":put [/system routerboard get serial-number]").rstrip()
+            version = ssh_cmd(":put [system resource get version]").rstrip()                        
+            remote_mt_cfg = '\n'.join(ssh_cmd("/export").split('\r\n')[3:])            
+            backup_dir_name = "{0}-{1}-{2}".format(ip, identity, serial_number)            
+            if not (remote_mt_cfg and identity and version and serial_number):
+                error_message = "---!!! Error: can't get data from {0}@{1}:{2}\n".format(config['Login'], ip, str(port))
+                errors_email_report_body += error_message                
+                ssh_client.close()
+                continue             
+            create_dir(os.path.join(config["backup_pth"], backup_dir_name))
+            if os.path.isfile(os.path.join(config["backup_pth"], backup_dir_name, "current.rsc")) == False:                
+                create_backup(timestamp, ip, identity, backup_dir_name, remote_mt_cfg, version, is_first=True)
+                ssh_client.close()
+                continue
+            else:                
+                create_backup(timestamp, ip, identity, backup_dir_name, remote_mt_cfg, version, is_first=False)
+                ssh_client.close()            
+
+
+def write_to_file(path, data, mode): # a - append , w - write
+    with open(path, mode) as myfile:
+        myfile.write(data)
+
+
+def create_backup(timestamp, ip, identity, backup_dir_name, remote_mt_cfg, version, is_first=False):
+    global diff_email_report_body
+    if is_first:
+        print("--->>> Create first time backup\n")
+        create_dir(os.path.join(config["backup_pth"], backup_dir_name, timestamp))    
+        write_to_file(os.path.join(config["backup_pth"], backup_dir_name, timestamp, "export.rsc"), remote_mt_cfg, "w")
+        write_to_file(os.path.join(config["backup_pth"], backup_dir_name, "current.rsc"), remote_mt_cfg, "w")
+        do_binnary_backup(timestamp, backup_dir_name, version)
+        return 1
+    with open (os.path.join(config["backup_pth"], backup_dir_name, "current.rsc"), "r") as myfile:
+        current_config = myfile.read()
+    diff = difflib.unified_diff(current_config.splitlines(), remote_mt_cfg.splitlines(), fromfile='Archived config', tofile='Config on router', lineterm='', n=2)        
+    diff_result = '\n'.join(diff)
+    if diff_result == "":
+        print("--->>> No changes detected...\n")
+        return 0
+    else:
+        print("--->>> Config is changed. Start backup...\n")
+        create_dir(os.path.join(config["backup_pth"], backup_dir_name, timestamp))    
+        write_to_file(os.path.join(config["backup_pth"], backup_dir_name, timestamp, "export.rsc"), remote_mt_cfg, "w")
+        write_to_file(os.path.join(config["backup_pth"], backup_dir_name, "current.rsc"), remote_mt_cfg, "w")
+        write_to_file(os.path.join(config["backup_pth"], backup_dir_name, "diff.log"), ">>> {0} <<< \n".format(timestamp) + diff_result + "\n\n\n", "a")
+        do_binnary_backup(timestamp, backup_dir_name, version)
+        diff_email_report_body += diff_report_format(timestamp, ip, identity, diff_result)        
+        return 1
+
+
+def do_binnary_backup(timestamp, backup_dir_name, version):
+    if LooseVersion(version) >= LooseVersion("6.13"):        
+        if config["encrypt"]=="yes":        
+            if str(config["backup_passwd"])!="":
+                ssh_cmd('/system backup save name=/mt-backup.backup dont-encrypt=no password="' + str(config["backup_passwd"]) + '"')                                
+            elif str(config["backup_passwd"]) == "":
+                ssh_cmd("/system backup save name=/mt-backup.backup dont-encrypt=no")                
+        elif config["encrypt"]=="no":            
+            ssh_cmd("/system backup save name=/mt-backup.backup dont-encrypt=yes")    
+    else:        
+        ssh_cmd("/system backup save name=/mt-backup.backup")
+    #print ("--->>> Save backup to ", os.path.join(config["backup_pth"], backup_dir_name, timestamp, "mt-backup.backup"))
+    ssh_get_file("mt-backup.backup", os.path.join(config["backup_pth"], backup_dir_name, timestamp, "mt-backup.backup"))    
+
+
+def diff_report_format(timestamp, ip, identity, diff_result):
+    passwd_pattern = re.compile( '(password=\\W+\S+|password=\S+|authentication-key=\\W+\S+|authentication-key=\S+|wpa2-pre-shared-key=\\W+\S+|wpa2-pre-shared-key=\S+|passphrase=\\W+\S+|passphrase=\S+|secret=\\W+\S+|secret=\S+)' )
+    diff_result_without_passwds = passwd_pattern.sub('PASSWD', diff_result)
+    formatted_string = """
+Date: %(date)s
+IP: %(ip)s
+Router Identity: %(identity)s
+
+%(delta)s
+--------------------------------------------------------------
+""" % {"date":timestamp, "ip":ip, "identity":identity, "delta":diff_result_without_passwds}
+    return formatted_string
+
+
+def sendmail(smtp_serv, login, passwd, mail_from, mail_to, subject, body):    
+    try:
+        server = smtplib.SMTP(smtp_serv)
         server.starttls()
-        server.login(login,passwd)        
-        m="From: %s\r\nTo: %s\r\nSubject: %s\r\nX-Mailer: My-Mail\r\n\r\n" % (mail_from, mail_to, subject)
-        server.sendmail(mail_from, mail_to, m+msg)
+        server.login(login,passwd)
+        headers = "From: %s\r\nTo: %s\r\nSubject: %s\r\nX-Mailer: My-Mail\r\n\r\n" % (mail_from, mail_to, subject)
+        server.sendmail(mail_from, mail_to, headers + body)
         server.quit()
     except smtplib.SMTPAuthenticationError:
-        printout("!!! Невозможно отправить почту, ошибка аутентификации.", RED)
-    except Exception, e:
-        printout ("!!! Невозможно отравить почту: " + str(e), RED) 
-
-def has_colours(stream): #раскрашивание вывода в консоль
-    if not hasattr(stream, "isatty"):
-        return False
-    if not stream.isatty():
-        return False 
-    try:
-        import curses
-        curses.setupterm()
-        return curses.tigetnum("colors") > 2
-    except:
-        return False 
-has_colours = has_colours(sys.stdout)
-
-def printout(text, colour=WHITE): #Функция для вывода цветных строк в консоль
-    if has_colours:
-        seq = "\x1b[1;%dm" % (30+colour) + text + "\x1b[0m" + "\n"
-        sys.stdout.write(seq)
-    else:
-        sys.stdout.write(text) 
-
-def delta_report(date,ip,identity,mt_serial,delta): #формирует отчет по разнице в конфигурациях
-    passwd_pattern = re.compile( '(password=\\W+\S+|password=\S+|authentication-key=\\W+\S+|authentication-key=\S+|wpa2-pre-shared-key=\\W+\S+|wpa2-pre-shared-key=\S+|passphrase=\\W+\S+|passphrase=\S+|secret=\\W+\S+|secret=\S+)' )
-    delta=passwd_pattern.sub('',delta)
-    msg_body="""
-Дата: %(date)s
-IP: %(ip)s
-Identity: %(identity)s
-Serial #: %(mt_serial)s
-Diff: %(delta)s
---------------------------------------------------------------
-""" % {"date":date,"ip":ip, "identity":identity, "mt_serial":mt_serial, "delta":delta}
-    return msg_body
-
-#def remove_sensitive_data_from_email():
+        print("---!!! Error: Can't connect to smtp server: Authentication failed")
+    except Exception as err:
+        print("---!!! Error: Can't connect to smtp server: " + str(err)) 
 
 
-# Отсюда начинается исполнение скрипта.
+# Start execution #######################
 os.system('clear') 
-config = yaml.load(open('config.conf')) 
-mt_ip_list = readfile('ip_list.txt')
-
-printout("""
+print("""
   MMM      MMM       KKK                          TTTTTTTTTTT      KKK
   MMMM    MMMM       KKK                          TTTTTTTTTTT      KKK
   MMM MMMM MMM  III  KKK  KKK  RRRRRR     OOOOOO      TTT     III  KKK  KKK
@@ -345,25 +231,56 @@ printout("""
   MMM      MMM  III  KKK KKK   RRRRRR    OOO  OOO     TTT     III  KKK KKK
   MMM      MMM  III  KKK  KKK  RRR  RRR   OOOOOO      TTT     III  KKK  KKK
 ------------------------------------------------------------------------------            
-              backup script by V.Shepelev 0.9 beta
+ backup script by V.Shepelev ver1.0                         vs@foto-glaz.ru
+""")
 
-""",GREEN)
+try:
+    routers_list = [] 
+    with open("ip_list.txt") as f:
+        for line in f:
+            try:                
+                ip_and_port = re.findall(r'(^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{2,5})', line)
+                if socket.inet_aton(ip_and_port[0][0]) and int(ip_and_port[0][1]) <= 65535:
+                    routers_list.append(ip_and_port)
+            except socket.error: pass
+            except IndexError: pass
+except IOError:
+    print("---!!! Error: can't read ip_list.txt")    
+    sys.exit()
 
-ssh_client =""
-error_msg_body=""
-errors_count=0
-delta_msg_body=""
+try:
+    config = yaml.load(open('config.conf')) 
+except IOError:
+    print("---!!! Error: can't read config.conf")    
+    sys.exit()
 
-directory_exist(config["backup_pth"])
+create_dir(config["backup_pth"])
+print("--->>> Connection username:", config['Login'])
+print("--->>> Backup storage directory", os.path.join(config["backup_pth"]))
 
-if str(config["SSH_key_pth"])=="None":
-    print (">>> Инициализирую соединения с использованием аутентификации по паролю")
-    do_backup_p(mt_ip_list,str(config["Login"]),str(config["Password"]))
-else:
-    print (">>> Использую аутентификацию по ключу "+ str(config["SSH_key_pth"]))
-    do_backup_k(mt_ip_list,str(config["Login"]),str(config["SSH_key_pth"]))
-if len(delta_msg_body) > 10:
-    sendmail(str(config["smtp_server"]),str(config["smtp_login"]), str(config["smtp_paswd"]), str(config["email_from"]), str(config["email_to"]),"Mikrotik backup script: Configuration changed",delta_msg_body)
-if errors_count >= int(config["errorlevel"]):
-    sendmail(str(config["smtp_server"]),str(config["smtp_login"]), str(config["smtp_paswd"]), str(config["email_from"]), str(config["email_to"]),"Mikrotik backup script: Error report",error_msg_body)
+if config['auth_method'] == "key":
+    config['pkey'] = open_ssh_key()
 
+if config["encrypt"]=="yes":        
+    if str(config["backup_passwd"])!="":                
+        print ("--->>> Backup mode: encryption with password")
+    elif str(config["backup_passwd"]) == "":                
+        print ("--->>> Backup mode: encription without password")        
+elif config["encrypt"]=="no":
+    print ("--->>> Backup mode: without encription")        
+
+
+diff_email_report_body = ""
+errors_email_report_body = ""
+print("\n" + "-" * 78 + "\n")
+
+do_backup()
+
+if diff_email_report_body:    
+    print("--->>> Sending email diff report")
+    sendmail(config["smtp_server"], config["smtp_login"], config["smtp_paswd"], config["email_from"],
+                    config["email_to"], "Mikrotik backup script: Configuration is changed", diff_email_report_body)
+if errors_email_report_body:
+    print("--->>> Sending email error report")
+    sendmail(config["smtp_server"], config["smtp_login"], config["smtp_paswd"], config["email_from"],
+                    config["email_to"], "Mikrotik backup script: Error report", errors_email_report_body)

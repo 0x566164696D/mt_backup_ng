@@ -1,0 +1,33 @@
+#ssh auth method (pass\key)
+auth_method: "pass"
+
+#Login and password.
+Login: "backup"
+Password: "SecurePA$$WD"
+
+#ssh private key file (RSA or DSA)
+# '\'' needs to be escaped with '\'
+# '~' is not permited
+#For example, private_key_file: "d:\\ssh-keys\\id_rsa"
+#or private_key_file: ../.ssh/id_rsa
+private_key_file: "../.ssh/id_rsa"
+
+#Backup storage path
+# \ needs to be escaped with \!
+#For example, backup_pth: "d:\\backups\\mikrotik"
+backup_pth: "backup"
+
+#Binary backup encryption (yes\no) (available from ROS 6.13)
+encrypt: "no"
+
+#Binary backup password protection.
+#If password is not set, recovery available only 
+#on routrer where backup was created.
+backup_passwd: "SecurePA$$WD"
+
+#Email notification settings
+smtp_server: "smtp.gmail.com:587"
+smtp_login: "test@example.com"
+smtp_paswd: "passwd"
+email_from: "test@example.com"
+email_to: "admin@example.com"

@@ -1,3 +1,5 @@
-*.pyc
+﻿*.pyc
 backup/*
 *.bak
+ip_list.txt
+config.conf
